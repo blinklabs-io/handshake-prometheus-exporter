@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# bitcoind-monitor.py
+# hsd-monitor.py
 #
-# An exporter for Prometheus and Bitcoin Core.
+# An exporter for Prometheus and Handshake Daemon (HSD).
 #
 # Copyright 2018 Kevin M. Gallagher
 # Copyright 2019-2024 Jeff Stein
+# Copyright 2025 Blink Labs, Inc.
 #
-# Published at https://github.com/jvstein/bitcoin-prometheus-exporter
+# Published at https://github.com/blinklabs-io/handshake-prometheus-exporter
 # Licensed under BSD 3-clause (see LICENSE).
 #
 # Dependency licenses (retrieved 2020-05-31):
@@ -18,6 +19,7 @@ import json
 import logging
 import time
 import os
+import requests
 import signal
 import sys
 import socket
@@ -36,99 +38,79 @@ from bitcoin.rpc import JSONRPCError, InWarmupError, Proxy
 from prometheus_client import make_wsgi_app, Gauge, Counter
 
 
-logger = logging.getLogger("bitcoin-exporter")
+logger = logging.getLogger("handshake-exporter")
 
 # Create Prometheus metrics to track hsd stats.
 HANDSHAKE_BLOCKS = Gauge("handshake_blocks", "Block height")
 HANDSHAKE_DIFFICULTY = Gauge("handshake_difficulty", "Difficulty")
 HANDSHAKE_PEERS = Gauge("handshake_peers", "Number of peers")
-HANDSHAKE_CONN_IN = Gauge("handshake_conn_in", "Number of connections in")
-HANDSHAKE_CONN_OUT = Gauge("handshake_conn_out", "Number of connections out")
 
 HANDSHAKE_HASHPS_GAUGES = {}  # type: Dict[int, Gauge]
-HANDSHAKE_ESTIMATED_FEE_GAUGES = {}  # type: Dict[int, Gauge] # Note: HSD uses estimatefee, not estimatesmartfee
+HANDSHAKE_ESTIMATED_SMART_FEE_GAUGES = {}  # type: Dict[int, Gauge]
 
-BITCOIN_WARNINGS = Counter("bitcoin_warnings", "Number of network or blockchain warnings detected")
-BITCOIN_UPTIME = Gauge("bitcoin_uptime", "Number of seconds the Bitcoin daemon has been running")
+HANDSHAKE_WARNINGS = Counter("handshake_warnings", "Number of network or blockchain warnings detected")
+HANDSHAKE_UPTIME = Gauge("handshake_uptime", "Number of seconds the Handshake daemon has been running")
 
-BITCOIN_MEMINFO_USED = Gauge("bitcoin_meminfo_used", "Number of bytes used")
-BITCOIN_MEMINFO_FREE = Gauge("bitcoin_meminfo_free", "Number of bytes available")
-BITCOIN_MEMINFO_TOTAL = Gauge("bitcoin_meminfo_total", "Number of bytes managed")
-BITCOIN_MEMINFO_LOCKED = Gauge("bitcoin_meminfo_locked", "Number of bytes locked")
-BITCOIN_MEMINFO_CHUNKS_USED = Gauge("bitcoin_meminfo_chunks_used", "Number of allocated chunks")
-BITCOIN_MEMINFO_CHUNKS_FREE = Gauge("bitcoin_meminfo_chunks_free", "Number of unused chunks")
+HANDSHAKE_MEM_TOTAL = Gauge("handshake_mem_total", "Total memory used by the HSD process (MB)")
+HANDSHAKE_MEM_JS_HEAP = Gauge("handshake_mem_js_heap", "Current JS heap memory usage (MB)")
+HANDSHAKE_MEM_JS_HEAP_TOTAL = Gauge("handshake_mem_js_heap_total", "Total JS heap memory allocated (MB)")
+HANDSHAKE_MEM_NATIVE_HEAP = Gauge("handshake_mem_native_heap", "Native memory usage (MB)")
+HANDSHAKE_MEM_EXTERNAL = Gauge("handshake_mem_external", "Memory usage for external resources (MB)")
 
-BITCOIN_MEMPOOL_BYTES = Gauge("bitcoin_mempool_bytes", "Size of mempool in bytes")
-BITCOIN_MEMPOOL_SIZE = Gauge(
-    "bitcoin_mempool_size", "Number of unconfirmed transactions in mempool"
+HANDSHAKE_MEMPOOL_BYTES = Gauge("handshake_mempool_bytes", "Size of mempool in bytes")
+HANDSHAKE_MEMPOOL_SIZE = Gauge(
+    "handshake_mempool_size", "Number of unconfirmed transactions in mempool"
 )
-BITCOIN_MEMPOOL_USAGE = Gauge("bitcoin_mempool_usage", "Total memory usage for the mempool")
-BITCOIN_MEMPOOL_MINFEE = Gauge(
-    "bitcoin_mempool_minfee", "Minimum fee rate in BTC/kB for tx to be accepted in mempool"
+HANDSHAKE_MEMPOOL_USAGE = Gauge("handshake_mempool_usage", "Total memory usage for the mempool")
+HANDSHAKE_MEMPOOL_MINFEE = Gauge(
+    "handshake_mempool_minfee", "Minimum fee rate in HNS/kB for tx to be accepted in mempool"
 )
-BITCOIN_MEMPOOL_UNBROADCAST = Gauge(
-    "bitcoin_mempool_unbroadcast", "Number of transactions waiting for acknowledgment"
-)
-
-BITCOIN_LATEST_BLOCK_HEIGHT = Gauge(
-    "bitcoin_latest_block_height", "Height or index of latest block"
-)
-BITCOIN_LATEST_BLOCK_WEIGHT = Gauge(
-    "bitcoin_latest_block_weight", "Weight of latest block according to BIP 141"
-)
-BITCOIN_LATEST_BLOCK_SIZE = Gauge("bitcoin_latest_block_size", "Size of latest block in bytes")
-BITCOIN_LATEST_BLOCK_TXS = Gauge(
-    "bitcoin_latest_block_txs", "Number of transactions in latest block"
+HANDSHAKE_MEMPOOL_UNBROADCAST = Gauge(
+    "handshake_mempool_unbroadcast", "Number of transactions waiting for acknowledgment"
 )
 
-BITCOIN_TXCOUNT = Gauge("bitcoin_txcount", "Number of TX since the genesis block")
+HANDSHAKE_LATEST_BLOCK_HEIGHT = Gauge(
+    "handshake_latest_block_height", "Height or index of latest block"
+)
+HANDSHAKE_LATEST_BLOCK_WEIGHT = Gauge(
+    "handshake_latest_block_weight", "Weight of latest block according to BIP 141"
+)
+HANDSHAKE_LATEST_BLOCK_SIZE = Gauge("handshake_latest_block_size", "Size of latest block in bytes")
+HANDSHAKE_LATEST_BLOCK_TXS = Gauge(
+    "handshake_latest_block_txs", "Number of transactions in latest block"
+)
 
-BITCOIN_NUM_CHAINTIPS = Gauge("bitcoin_num_chaintips", "Number of known blockchain branches")
+HANDSHAKE_TXCOUNT = Gauge("handshake_txcount", "Number of TX since the genesis block")
 
-BITCOIN_TOTAL_BYTES_RECV = Gauge("bitcoin_total_bytes_recv", "Total bytes received")
-BITCOIN_TOTAL_BYTES_SENT = Gauge("bitcoin_total_bytes_sent", "Total bytes sent")
+HANDSHAKE_NUM_CHAINTIPS = Gauge("handshake_num_chaintips", "Number of known blockchain branches")
 
-BITCOIN_LATEST_BLOCK_INPUTS = Gauge(
-    "bitcoin_latest_block_inputs", "Number of inputs in transactions of latest block"
-)
-BITCOIN_LATEST_BLOCK_OUTPUTS = Gauge(
-    "bitcoin_latest_block_outputs", "Number of outputs in transactions of latest block"
-)
-BITCOIN_LATEST_BLOCK_VALUE = Gauge(
-    "bitcoin_latest_block_value", "Bitcoin value of all transactions in the latest block"
-)
-BITCOIN_LATEST_BLOCK_FEE = Gauge(
-    "bitcoin_latest_block_fee", "Total fee to process the latest block"
-)
+HANDSHAKE_TOTAL_BYTES_RECV = Gauge("handshake_total_bytes_recv", "Total bytes received")
+HANDSHAKE_TOTAL_BYTES_SENT = Gauge("handshake_total_bytes_sent", "Total bytes sent")
 
 BAN_ADDRESS_METRICS = os.environ.get("BAN_ADDRESS_METRICS", "false").lower() == "true"
-BITCOIN_BANNED_PEERS = Gauge("bitcoin_banned_peers", "Number of peers that have been banned")
-BITCOIN_BAN_CREATED = None
-BITCOIN_BANNED_UNTIL = None
+HANDSHAKE_BANNED_PEERS = Gauge("handshake_banned_peers", "Number of peers that have been banned")
+HANDSHAKE_BAN_CREATED = None
+HANDSHAKE_BANNED_UNTIL = None
 if BAN_ADDRESS_METRICS:
-    BITCOIN_BAN_CREATED = Gauge(
-        "bitcoin_ban_created", "Time the ban was created", labelnames=["address", "reason"]
+    HANDSHAKE_BAN_CREATED = Gauge(
+        "handshake_ban_created", "Time the ban was created", labelnames=["address", "reason"]
     )
-    BITCOIN_BANNED_UNTIL = Gauge(
-        "bitcoin_banned_until", "Time the ban expires", labelnames=["address", "reason"]
+    HANDSHAKE_BANNED_UNTIL = Gauge(
+        "handshake_banned_until", "Time the ban expires", labelnames=["address", "reason"]
     )
 
-BITCOIN_SERVER_VERSION = Gauge("bitcoin_server_version", "The server version")
-BITCOIN_PROTOCOL_VERSION = Gauge("bitcoin_protocol_version", "The protocol version of the server")
+HANDSHAKE_SERVER_VERSION = Gauge("handshake_server_version", "The server version")
+HANDSHAKE_PROTOCOL_VERSION = Gauge("handshake_protocol_version", "The protocol version of the server")
 
-BITCOIN_SIZE_ON_DISK = Gauge("bitcoin_size_on_disk", "Estimated size of the block and undo files")
-
-BITCOIN_VERIFICATION_PROGRESS = Gauge(
-    "bitcoin_verification_progress", "Estimate of verification progress [0..1]"
+HANDSHAKE_VERIFICATION_PROGRESS = Gauge(
+    "handshake_verification_progress", "Estimate of verification progress [0..1]"
 )
-
-BITCOIN_RPC_ACTIVE = Gauge("bitcoin_rpc_active", "Number of RPC calls being processed")
 
 EXPORTER_ERRORS = Counter(
-    "bitcoin_exporter_errors", "Number of errors encountered by the exporter", labelnames=["type"]
+    "handshake_exporter_errors", "Number of errors encountered by the exporter", labelnames=["type"]
 )
 PROCESS_TIME = Counter(
-    "bitcoin_exporter_process_time", "Time spent processing metrics from bitcoin node"
+    "handshake_exporter_process_time", "Time spent processing metrics from handshake node"
 )
 
 SATS_PER_COIN = Decimal(1e8)
@@ -139,8 +121,8 @@ HANDSHAKE_RPC_PORT = os.environ.get("HANDSHAKE_RPC_PORT", "12037")  # Default to
 HANDSHAKE_RPC_USER = os.environ.get("HANDSHAKE_RPC_USER")
 HANDSHAKE_RPC_PASSWORD = os.environ.get("HANDSHAKE_RPC_PASSWORD")
 HANDSHAKE_CONF_PATH = os.environ.get("HANDSHAKE_CONF_PATH")
-HASHPS_BLOCKS = [int(b) for b in os.environ.get("HASHPS_BLOCKS", "-1,1,120").split(",") if b != ""]
-SMART_FEES = [int(f) for f in os.environ.get("SMARTFEE_BLOCKS", "2,3,5,20").split(",") if f != ""]
+HASHPS_BLOCKS = [int(b) for b in os.environ.get("HASHPS_BLOCKS", "0,1,120").split(",") if b != ""]
+SMART_FEES = [int(f) for f in os.environ.get("SMARTFEE_BLOCKS", "2,3,5,10").split(",") if f != ""]
 METRICS_ADDR = os.environ.get("METRICS_ADDR", "")  # empty = any address
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "12000"))
 RETRIES = int(os.environ.get("RETRIES", 5))
@@ -167,27 +149,28 @@ def error_evaluator(e: Exception) -> bool:
 
 @lru_cache(maxsize=1)
 def rpc_client_factory():
-    # Configuration is done in this order of precedence:
-    #   - Explicit config file.
-    #   - BITCOIN_RPC_USER and BITCOIN_RPC_PASSWORD environment variables.
-    #   - Default bitcoin config file (as handled by Proxy.__init__).
-    use_conf = (
-        (HANDSHAKE_CONF_PATH is not None)
-        or (HANDSHAKE_RPC_USER is None)
-        or (HANDSHAKE_RPC_PASSWORD is None)
-    )
-
-    if use_conf:
-        logger.info("Using config file: %s", HANDSHAKE_CONF_PATH or "<default>")
-        return lambda: Proxy(btc_conf_file=HANDSHAKE_CONF_PATH, timeout=TIMEOUT)
-    else:
-        host = HANDSHAKE_RPC_HOST
+    """
+    Create an RPC client using environment variables.
+    HSD uses a different config format than Bitcoin, so we rely only on
+    environment variables for configuration.
+    """
+    host = HANDSHAKE_RPC_HOST
+    # Format auth string with username:password@
+    if HANDSHAKE_RPC_USER and HANDSHAKE_RPC_PASSWORD:
         host = "{}:{}@{}".format(HANDSHAKE_RPC_USER, HANDSHAKE_RPC_PASSWORD, host)
-        if HANDSHAKE_RPC_PORT:
-            host = "{}:{}".format(host, HANDSHAKE_RPC_PORT)
-        service_url = "{}://{}".format(HANDSHAKE_RPC_SCHEME, host)
-        logger.info("Using environment configuration")
-        return lambda: Proxy(service_url=service_url, timeout=TIMEOUT)
+    else:
+        logger.warning("RPC user or password not provided. Authentication may fail.")
+
+    # Add port if specified
+    if HANDSHAKE_RPC_PORT:
+        host = "{}:{}".format(host, HANDSHAKE_RPC_PORT)
+
+    # Create full service URL
+    service_url = "{}://{}".format(HANDSHAKE_RPC_SCHEME, host)
+    logger.info("Using environment configuration for RPC connection")
+
+    # Return a function that creates a new proxy with the configured URL
+    return lambda: Proxy(service_url=service_url, timeout=TIMEOUT)
 
 
 def rpc_client():
@@ -200,7 +183,7 @@ def rpc_client():
     on_retry=on_retry,
     error_evaluator=error_evaluator,
 )
-def bitcoinrpc(*args) -> RpcResult:
+def handshakerpc(*args) -> RpcResult:
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("RPC call: " + " ".join(str(a) for a in args))
 
@@ -211,35 +194,74 @@ def bitcoinrpc(*args) -> RpcResult:
 
 
 @lru_cache(maxsize=1)
-def getblockstats(block_hash: str):
+def get_handshake_block_stats(block_hash: str):
+    """
+    Create block stats using Handshake RPC calls as an alternative to Bitcoin's getblockstats.
+    """
     try:
-        block = bitcoinrpc(
-            "getblockstats",
-            block_hash,
-            ["total_size", "total_weight", "totalfee", "txs", "height", "ins", "outs", "total_out"],
-        )
-    except Exception:
-        logger.exception("Failed to retrieve block " + block_hash + " statistics from bitcoind.")
+        # Get the block with transaction details (verbose=true)
+        block = handshakerpc("getblock", block_hash, True)
+
+        if not block:
+            logger.error(f"Failed to retrieve block {block_hash}")
+            return None
+
+        # Calculate stats that we can extract from the block data
+        stats = {
+            "height": block["height"],
+            "total_size": block.get("size", 0),
+            "total_weight": block.get("weight", 0),
+            "txs": len(block["tx"]),
+            "ins": 0,
+            "outs": 0,
+            "total_out": 0,
+            "totalfee": 0
+        }
+
+        logger.debug(f"Calculated basic block stats for {block_hash}: height={stats['height']}, txs={stats['txs']}")
+        return stats
+
+    except Exception as e:
+        logger.exception(f"Failed to calculate block stats for {block_hash}: {e}")
         return None
-    return block
 
 
 def smartfee_gauge(num_blocks: int) -> Gauge:
-    gauge = BITCOIN_ESTIMATED_SMART_FEE_GAUGES.get(num_blocks)
+    gauge = HANDSHAKE_ESTIMATED_SMART_FEE_GAUGES.get(num_blocks)
     if gauge is None:
         gauge = Gauge(
-            "bitcoin_est_smart_fee_%d" % num_blocks,
+            "handshake_est_smart_fee_%d" % num_blocks,
             "Estimated smart fee per kilobyte for confirmation in %d blocks" % num_blocks,
         )
-        BITCOIN_ESTIMATED_SMART_FEE_GAUGES[num_blocks] = gauge
+        HANDSHAKE_ESTIMATED_SMART_FEE_GAUGES[num_blocks] = gauge
     return gauge
 
 
 def do_smartfee(num_blocks: int) -> None:
-    smartfee = bitcoinrpc("estimatesmartfee", num_blocks).get("feerate")
-    if smartfee is not None:
-        gauge = smartfee_gauge(num_blocks)
-        gauge.set(smartfee)
+    try:
+        smartfee = handshakerpc("estimatesmartfee", num_blocks)
+
+        # Check if we got a valid fee estimate
+        if "fee" in smartfee:
+            fee_value = float(smartfee["fee"])
+
+            if fee_value > 0:
+                # Valid fee estimate
+                gauge = smartfee_gauge(num_blocks)
+                gauge.set(fee_value)
+                logger.debug(f"Set smart fee for {num_blocks} blocks to {fee_value}")
+            else:
+                logger.debug(f"Fee estimation for {num_blocks} blocks returned {fee_value} (estimation unavailable)")
+
+                # Set a default minimum fee instead
+                gauge = smartfee_gauge(num_blocks)
+                gauge.set(0.001)
+    except Exception as e:
+        if "Too many confirmations for estimate" in str(e):
+            logger.warning(f"Block target {num_blocks} is too high for estimatesmartfee")
+        else:
+            logger.error(f"Error getting estimatesmartfee for {num_blocks} blocks: {e}")
+            exception_count(e)
 
 
 def hashps_gauge_suffix(nblocks):
@@ -251,108 +273,225 @@ def hashps_gauge_suffix(nblocks):
 
 
 def hashps_gauge(num_blocks: int) -> Gauge:
-    gauge = BITCOIN_HASHPS_GAUGES.get(num_blocks)
+    gauge = HANDSHAKE_HASHPS_GAUGES.get(num_blocks)
     if gauge is None:
         desc_end = "for the last %d blocks" % num_blocks
         if num_blocks == -1:
             desc_end = "since the last difficulty change"
         gauge = Gauge(
-            "bitcoin_hashps%s" % hashps_gauge_suffix(num_blocks),
+            "handshake_hashps%s" % hashps_gauge_suffix(num_blocks),
             "Estimated network hash rate per second %s" % desc_end,
         )
-        BITCOIN_HASHPS_GAUGES[num_blocks] = gauge
+        HANDSHAKE_HASHPS_GAUGES[num_blocks] = gauge
     return gauge
 
 
 def do_hashps_gauge(num_blocks: int) -> None:
-    hps = float(bitcoinrpc("getnetworkhashps", num_blocks))
+    hps = float(handshakerpc("getnetworkhashps", num_blocks))
     if hps is not None:
         gauge = hashps_gauge(num_blocks)
         gauge.set(hps)
 
 
+# Make a direct HTTP request to the / endpoint for some metrics
+def get_node_info():
+    """Get node info directly from the HTTP API endpoint."""
+    try:
+        url = f"{HANDSHAKE_RPC_SCHEME}://{HANDSHAKE_RPC_HOST}:{HANDSHAKE_RPC_PORT}/"
+        auth = (HANDSHAKE_RPC_USER, HANDSHAKE_RPC_PASSWORD)
+        response = requests.get(url, auth=auth, timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error getting node info from HTTP API: {e}")
+        return None
+
+
 def refresh_metrics() -> None:
-    uptime = int(bitcoinrpc("uptime"))
-    meminfo = bitcoinrpc("getmemoryinfo", "stats")["locked"]
-    blockchaininfo = bitcoinrpc("getblockchaininfo")
-    networkinfo = bitcoinrpc("getnetworkinfo")
-    chaintips = len(bitcoinrpc("getchaintips"))
-    mempool = bitcoinrpc("getmempoolinfo")
-    nettotals = bitcoinrpc("getnettotals")
-    rpcinfo = bitcoinrpc("getrpcinfo")
-    txstats = bitcoinrpc("getchaintxstats")
-    latest_blockstats = getblockstats(str(blockchaininfo["bestblockhash"]))
+    try:
+        # Get uptime from direct HTTP endpoint
+        node_info = get_node_info()
+        if node_info and "time" in node_info and "uptime" in node_info["time"]:
+            HANDSHAKE_UPTIME.set(node_info["time"]["uptime"])
+            logger.debug(f"Set uptime to {node_info['time']['uptime']}")
+        else:
+            logger.warning("Uptime information not available from HTTP API")
+    except Exception as e:
+        logger.error("Error getting node uptime: %s", e)
+        exception_count(e)
 
-    banned = bitcoinrpc("listbanned")
+    # Get blockchain info
+    try:
+        blockchaininfo = handshakerpc("getblockchaininfo")
+        HANDSHAKE_BLOCKS.set(blockchaininfo["blocks"])
+        HANDSHAKE_DIFFICULTY.set(float(blockchaininfo["difficulty"]))
 
-    BITCOIN_UPTIME.set(uptime)
-    BITCOIN_BLOCKS.set(blockchaininfo["blocks"])
-    BITCOIN_PEERS.set(networkinfo["connections"])
-    if "connections_in" in networkinfo:
-        BITCOIN_CONN_IN.set(networkinfo["connections_in"])
-    if "connections_out" in networkinfo:
-        BITCOIN_CONN_OUT.set(networkinfo["connections_out"])
-    BITCOIN_DIFFICULTY.set(blockchaininfo["difficulty"])
+        if "verificationprogress" in blockchaininfo:
+            HANDSHAKE_VERIFICATION_PROGRESS.set(blockchaininfo["verificationprogress"])
 
-    BITCOIN_SERVER_VERSION.set(networkinfo["version"])
-    BITCOIN_PROTOCOL_VERSION.set(networkinfo["protocolversion"])
-    BITCOIN_SIZE_ON_DISK.set(blockchaininfo["size_on_disk"])
-    BITCOIN_VERIFICATION_PROGRESS.set(blockchaininfo["verificationprogress"])
+        logger.debug(f"Set blocks to {blockchaininfo['blocks']}, difficulty to {float(blockchaininfo['difficulty'])}")
+    except Exception as e:
+        logger.error("Error getting blockchain info: %s", e)
+        exception_count(e)
 
-    for smartfee in SMART_FEES:
-        do_smartfee(smartfee)
+    # Get network info
+    try:
+        networkinfo = handshakerpc("getnetworkinfo")
+        # We need to turn the version string into a numeric value so we remove the .'s and pad it with zeroes
+        version_parts = networkinfo["version"].split(".")
+        version_padded = "".join(part.zfill(2) for part in version_parts)
+        HANDSHAKE_PEERS.set(networkinfo["connections"])
 
-    for hashps_block in HASHPS_BLOCKS:
-        do_hashps_gauge(hashps_block)
+        HANDSHAKE_SERVER_VERSION.set(version_padded)
+        HANDSHAKE_PROTOCOL_VERSION.set(networkinfo["protocolversion"])
 
-    BITCOIN_BANNED_PEERS.set(len(banned))
-    if BAN_ADDRESS_METRICS:
-        for ban in banned:
-            if BITCOIN_BAN_CREATED:
-                BITCOIN_BAN_CREATED.labels(
-                    address=ban["address"], reason=ban.get("ban_reason", "manually added")
-                ).set(ban["ban_created"])
-            if BITCOIN_BANNED_UNTIL:
-                BITCOIN_BANNED_UNTIL.labels(
-                    address=ban["address"], reason=ban.get("ban_reason", "manually added")
-                ).set(ban["banned_until"])
+        if networkinfo["warnings"]:
+            HANDSHAKE_WARNINGS.inc()
 
-    if networkinfo["warnings"]:
-        BITCOIN_WARNINGS.inc()
+        logger.debug(f"Set peers to {networkinfo['connections']}")
+    except Exception as e:
+        logger.error("Error getting network info: %s", e)
+        exception_count(e)
 
-    BITCOIN_TXCOUNT.set(txstats["txcount"])
+    # Get chain tips
+    try:
+        chaintips = len(handshakerpc("getchaintips"))
+        HANDSHAKE_NUM_CHAINTIPS.set(chaintips)
+        logger.debug(f"Set chaintips to {chaintips}")
+    except Exception as e:
+        logger.error("Error getting chain tips: %s", e)
+        exception_count(e)
 
-    BITCOIN_NUM_CHAINTIPS.set(chaintips)
+    # Get mempool info
+    try:
+        mempool = handshakerpc("getmempoolinfo")
+        HANDSHAKE_MEMPOOL_BYTES.set(mempool["bytes"])
+        HANDSHAKE_MEMPOOL_SIZE.set(mempool["size"])
+        HANDSHAKE_MEMPOOL_USAGE.set(mempool["usage"])
+        HANDSHAKE_MEMPOOL_MINFEE.set(float(mempool["mempoolminfee"]))
 
-    BITCOIN_MEMINFO_USED.set(meminfo["used"])
-    BITCOIN_MEMINFO_FREE.set(meminfo["free"])
-    BITCOIN_MEMINFO_TOTAL.set(meminfo["total"])
-    BITCOIN_MEMINFO_LOCKED.set(meminfo["locked"])
-    BITCOIN_MEMINFO_CHUNKS_USED.set(meminfo["chunks_used"])
-    BITCOIN_MEMINFO_CHUNKS_FREE.set(meminfo["chunks_free"])
+        if "unbroadcastcount" in mempool:
+            HANDSHAKE_MEMPOOL_UNBROADCAST.set(mempool["unbroadcastcount"])
 
-    BITCOIN_MEMPOOL_BYTES.set(mempool["bytes"])
-    BITCOIN_MEMPOOL_SIZE.set(mempool["size"])
-    BITCOIN_MEMPOOL_USAGE.set(mempool["usage"])
-    BITCOIN_MEMPOOL_MINFEE.set(mempool["mempoolminfee"])
-    if "unbroadcastcount" in mempool:
-        BITCOIN_MEMPOOL_UNBROADCAST.set(mempool["unbroadcastcount"])
+        logger.debug(f"Set mempool size to {mempool['size']}, bytes to {mempool['bytes']}")
+    except Exception as e:
+        logger.error("Error getting mempool info: %s", e)
+        exception_count(e)
 
-    BITCOIN_TOTAL_BYTES_RECV.set(nettotals["totalbytesrecv"])
-    BITCOIN_TOTAL_BYTES_SENT.set(nettotals["totalbytessent"])
+    # Get network totals
+    try:
+        nettotals = handshakerpc("getnettotals")
+        HANDSHAKE_TOTAL_BYTES_RECV.set(nettotals["totalbytesrecv"])
+        HANDSHAKE_TOTAL_BYTES_SENT.set(nettotals["totalbytessent"])
+        logger.debug(
+            f"Set total bytes received to {nettotals['totalbytesrecv']}, sent to {nettotals['totalbytessent']}")
+    except Exception as e:
+        logger.error("Error getting net totals: %s", e)
+        exception_count(e)
 
-    if latest_blockstats is not None:
-        BITCOIN_LATEST_BLOCK_SIZE.set(latest_blockstats["total_size"])
-        BITCOIN_LATEST_BLOCK_TXS.set(latest_blockstats["txs"])
-        BITCOIN_LATEST_BLOCK_HEIGHT.set(latest_blockstats["height"])
-        BITCOIN_LATEST_BLOCK_WEIGHT.set(latest_blockstats["total_weight"])
-        BITCOIN_LATEST_BLOCK_INPUTS.set(latest_blockstats["ins"])
-        BITCOIN_LATEST_BLOCK_OUTPUTS.set(latest_blockstats["outs"])
-        BITCOIN_LATEST_BLOCK_VALUE.set(latest_blockstats["total_out"] / SATS_PER_COIN)
-        BITCOIN_LATEST_BLOCK_FEE.set(latest_blockstats["totalfee"] / SATS_PER_COIN)
+    # Get TX stats - using chain state from the HTTP endpoint
+    try:
+        node_info = get_node_info()
 
-    # Subtract one because we don't want to count the "getrpcinfo" call itself
-    BITCOIN_RPC_ACTIVE.set(len(rpcinfo["active_commands"]) - 1)
+        if (node_info and "chain" in node_info and
+                "state" in node_info["chain"] and
+                "tx" in node_info["chain"]["state"]):
+
+            tx_count = node_info["chain"]["state"]["tx"]
+            HANDSHAKE_TXCOUNT.set(tx_count)
+            logger.debug(f"Set tx count to {tx_count} from HTTP API")
+        else:
+            logger.warning("Could not find transaction count in node information")
+    except Exception as e:
+        logger.error(f"Error getting transaction count: {e}")
+        exception_count(e)
+
+    # Get banned peers
+    try:
+        banned = handshakerpc("listbanned")
+        HANDSHAKE_BANNED_PEERS.set(len(banned))
+
+        if BAN_ADDRESS_METRICS:
+            for ban in banned:
+                if HANDSHAKE_BAN_CREATED:
+                    HANDSHAKE_BAN_CREATED.labels(
+                        address=ban["address"], reason=ban.get("ban_reason", "manually added")
+                    ).set(ban["ban_created"])
+                if HANDSHAKE_BANNED_UNTIL:
+                    HANDSHAKE_BANNED_UNTIL.labels(
+                        address=ban["address"], reason=ban.get("ban_reason", "manually added")
+                    ).set(ban["banned_until"])
+
+        logger.debug(f"Set banned peers to {len(banned)}")
+    except Exception as e:
+        logger.error("Error getting banned peers: %s", e)
+        exception_count(e)
+
+    # Get memory info
+    try:
+        if node_info and "memory" in node_info:
+            mem = node_info["memory"]
+            HANDSHAKE_MEM_TOTAL.set(mem["total"])
+            HANDSHAKE_MEM_JS_HEAP.set(mem["jsHeap"])
+            HANDSHAKE_MEM_JS_HEAP_TOTAL.set(mem["jsHeapTotal"])
+            HANDSHAKE_MEM_NATIVE_HEAP.set(mem["nativeHeap"])
+            HANDSHAKE_MEM_EXTERNAL.set(mem["external"])
+            logger.debug(f"Set Node.js memory metrics: total {mem['total']}MB, jsHeap {mem['jsHeap']}MB")
+        else:
+            # Fallback to RPC
+            try:
+                meminfo = handshakerpc("getmemoryinfo")
+                if isinstance(meminfo, dict):
+                    if "total" in meminfo:
+                        HANDSHAKE_MEM_TOTAL.set(meminfo["total"])
+                    if "jsHeap" in meminfo:
+                        HANDSHAKE_MEM_JS_HEAP.set(meminfo["jsHeap"])
+                    if "jsHeapTotal" in meminfo:
+                        HANDSHAKE_MEM_JS_HEAP_TOTAL.set(meminfo["jsHeapTotal"])
+                    if "nativeHeap" in meminfo:
+                        HANDSHAKE_MEM_NATIVE_HEAP.set(meminfo["nativeHeap"])
+                    if "external" in meminfo:
+                        HANDSHAKE_MEM_EXTERNAL.set(meminfo["external"])
+                    logger.debug(f"Set memory info from RPC")
+            except Exception as e:
+                logger.error("Error getting memory info via RPC: %s", e)
+    except Exception as e:
+        logger.error("Error processing memory info: %s", e)
+        exception_count(e)
+
+    # Get smart fee estimates
+    try:
+        for smartfee in SMART_FEES:
+            do_smartfee(smartfee)
+    except Exception as e:
+        logger.error("Error getting smart fee estimates: %s", e)
+        exception_count(e)
+
+    # Get hashrate
+    try:
+        for hashps_block in HASHPS_BLOCKS:
+            do_hashps_gauge(hashps_block)
+    except Exception as e:
+        logger.error("Error getting network hashps: %s", e)
+        exception_count(e)
+
+    # Get latest block stats
+    try:
+        best_block_hash = handshakerpc("getbestblockhash")
+        latest_blockstats = get_handshake_block_stats(best_block_hash)
+
+        if latest_blockstats is not None:
+            HANDSHAKE_LATEST_BLOCK_SIZE.set(latest_blockstats["total_size"])
+            HANDSHAKE_LATEST_BLOCK_TXS.set(latest_blockstats["txs"])
+            HANDSHAKE_LATEST_BLOCK_HEIGHT.set(latest_blockstats["height"])
+            if "total_weight" in latest_blockstats:
+                HANDSHAKE_LATEST_BLOCK_WEIGHT.set(latest_blockstats["total_weight"])
+            logger.debug(f"Set latest block height to {latest_blockstats['height']}")
+        else:
+            logger.warning("Latest block stats returned None")
+    except Exception as e:
+        logger.error("Error getting latest block stats: %s", e)
+        exception_count(e)
 
 
 def sigterm_handler(signal, frame) -> None:
