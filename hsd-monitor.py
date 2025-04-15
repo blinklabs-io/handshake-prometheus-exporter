@@ -38,15 +38,15 @@ from prometheus_client import make_wsgi_app, Gauge, Counter
 
 logger = logging.getLogger("bitcoin-exporter")
 
-# Create Prometheus metrics to track bitcoind stats.
-BITCOIN_BLOCKS = Gauge("bitcoin_blocks", "Block height")
-BITCOIN_DIFFICULTY = Gauge("bitcoin_difficulty", "Difficulty")
-BITCOIN_PEERS = Gauge("bitcoin_peers", "Number of peers")
-BITCOIN_CONN_IN = Gauge("bitcoin_conn_in", "Number of connections in")
-BITCOIN_CONN_OUT = Gauge("bitcoin_conn_out", "Number of connections out")
+# Create Prometheus metrics to track hsd stats.
+HANDSHAKE_BLOCKS = Gauge("handshake_blocks", "Block height")
+HANDSHAKE_DIFFICULTY = Gauge("handshake_difficulty", "Difficulty")
+HANDSHAKE_PEERS = Gauge("handshake_peers", "Number of peers")
+HANDSHAKE_CONN_IN = Gauge("handshake_conn_in", "Number of connections in")
+HANDSHAKE_CONN_OUT = Gauge("handshake_conn_out", "Number of connections out")
 
-BITCOIN_HASHPS_GAUGES = {}  # type: Dict[int, Gauge]
-BITCOIN_ESTIMATED_SMART_FEE_GAUGES = {}  # type: Dict[int, Gauge]
+HANDSHAKE_HASHPS_GAUGES = {}  # type: Dict[int, Gauge]
+HANDSHAKE_ESTIMATED_FEE_GAUGES = {}  # type: Dict[int, Gauge] # Note: HSD uses estimatefee, not estimatesmartfee
 
 BITCOIN_WARNINGS = Counter("bitcoin_warnings", "Number of network or blockchain warnings detected")
 BITCOIN_UPTIME = Gauge("bitcoin_uptime", "Number of seconds the Bitcoin daemon has been running")
@@ -133,16 +133,16 @@ PROCESS_TIME = Counter(
 
 SATS_PER_COIN = Decimal(1e8)
 
-BITCOIN_RPC_SCHEME = os.environ.get("BITCOIN_RPC_SCHEME", "http")
-BITCOIN_RPC_HOST = os.environ.get("BITCOIN_RPC_HOST", "localhost")
-BITCOIN_RPC_PORT = os.environ.get("BITCOIN_RPC_PORT", "8332")
-BITCOIN_RPC_USER = os.environ.get("BITCOIN_RPC_USER")
-BITCOIN_RPC_PASSWORD = os.environ.get("BITCOIN_RPC_PASSWORD")
-BITCOIN_CONF_PATH = os.environ.get("BITCOIN_CONF_PATH")
+HANDSHAKE_RPC_SCHEME = os.environ.get("HANDSHAKE_RPC_SCHEME", "http")
+HANDSHAKE_RPC_HOST = os.environ.get("HANDSHAKE_RPC_HOST", "localhost")
+HANDSHAKE_RPC_PORT = os.environ.get("HANDSHAKE_RPC_PORT", "12037")  # Default to mainnet
+HANDSHAKE_RPC_USER = os.environ.get("HANDSHAKE_RPC_USER")
+HANDSHAKE_RPC_PASSWORD = os.environ.get("HANDSHAKE_RPC_PASSWORD")
+HANDSHAKE_CONF_PATH = os.environ.get("HANDSHAKE_CONF_PATH")
 HASHPS_BLOCKS = [int(b) for b in os.environ.get("HASHPS_BLOCKS", "-1,1,120").split(",") if b != ""]
 SMART_FEES = [int(f) for f in os.environ.get("SMARTFEE_BLOCKS", "2,3,5,20").split(",") if f != ""]
 METRICS_ADDR = os.environ.get("METRICS_ADDR", "")  # empty = any address
-METRICS_PORT = int(os.environ.get("METRICS_PORT", "9332"))
+METRICS_PORT = int(os.environ.get("METRICS_PORT", "12000"))
 RETRIES = int(os.environ.get("RETRIES", 5))
 TIMEOUT = int(os.environ.get("TIMEOUT", 30))
 RATE_LIMIT_SECONDS = int(os.environ.get("RATE_LIMIT", 5))
@@ -172,20 +172,20 @@ def rpc_client_factory():
     #   - BITCOIN_RPC_USER and BITCOIN_RPC_PASSWORD environment variables.
     #   - Default bitcoin config file (as handled by Proxy.__init__).
     use_conf = (
-        (BITCOIN_CONF_PATH is not None)
-        or (BITCOIN_RPC_USER is None)
-        or (BITCOIN_RPC_PASSWORD is None)
+        (HANDSHAKE_CONF_PATH is not None)
+        or (HANDSHAKE_RPC_USER is None)
+        or (HANDSHAKE_RPC_PASSWORD is None)
     )
 
     if use_conf:
-        logger.info("Using config file: %s", BITCOIN_CONF_PATH or "<default>")
-        return lambda: Proxy(btc_conf_file=BITCOIN_CONF_PATH, timeout=TIMEOUT)
+        logger.info("Using config file: %s", HANDSHAKE_CONF_PATH or "<default>")
+        return lambda: Proxy(btc_conf_file=HANDSHAKE_CONF_PATH, timeout=TIMEOUT)
     else:
-        host = BITCOIN_RPC_HOST
-        host = "{}:{}@{}".format(BITCOIN_RPC_USER, BITCOIN_RPC_PASSWORD, host)
-        if BITCOIN_RPC_PORT:
-            host = "{}:{}".format(host, BITCOIN_RPC_PORT)
-        service_url = "{}://{}".format(BITCOIN_RPC_SCHEME, host)
+        host = HANDSHAKE_RPC_HOST
+        host = "{}:{}@{}".format(HANDSHAKE_RPC_USER, HANDSHAKE_RPC_PASSWORD, host)
+        if HANDSHAKE_RPC_PORT:
+            host = "{}:{}".format(host, HANDSHAKE_RPC_PORT)
+        service_url = "{}://{}".format(HANDSHAKE_RPC_SCHEME, host)
         logger.info("Using environment configuration")
         return lambda: Proxy(service_url=service_url, timeout=TIMEOUT)
 

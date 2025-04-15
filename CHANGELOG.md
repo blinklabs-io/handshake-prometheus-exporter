@@ -3,6 +3,15 @@ Changes to the project.
 
 ## [Unreleased]
 
+Initial adaptation for Handshake from Bitcoin Prometheus Exporter.
+
+### Changed
+- Renamed exporter from bitcoin-prometheus-exporter to handshake-prometheus-exporter
+- Updated default ports to match Handshake node (12037, 13037, 14037)
+- Renamed all metrics from `bitcoin_*` to `handshake_*`
+
+## [Unreleased]
+
 BREAKING CHANGE: The `bitcoin_ban_created` and `bitcoin_banned_until` metrics are now disabled by default. Re-enable,
 if desired, using `BAN_ADDRESS_METRICS=true`.
 
