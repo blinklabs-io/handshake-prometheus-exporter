@@ -1,28 +1,27 @@
 services:
-  bitcoind:
+  handshaked:
     # DO NOT USE THIS IMAGE EXCEPT FOR TESTING!
-    image: jvstein/bitcoin-test-node:latest
+    image: ghcr.io/handshake-org/hsd:latest
     command:
-      - bitcoind
-      - -printtoconsole
-      - -conf=/etc/bitcoin/bitcoin.conf
-    volumes:
-      - ./test-bitcoin.conf:/etc/bitcoin/bitcoin.conf
+      - hsd
+      - --network=main
+      - --http-host=0.0.0.0
+      - --api-key=foo
 
   exporter:
-    image: jvstein/bitcoin-prometheus-exporter:latest
+    image: handshake-prometheus-exporter:latest
     build: .
     ports:
-      - "9332:9332"
+      - "12000:12000"
     environment:
-      BITCOIN_RPC_HOST: bitcoind
-      BITCOIN_RPC_USER: "alice"
-      BITCOIN_RPC_PASSWORD: "password=123&z!=@e"
-      #BITCOIN_CONF_PATH: /etc/bitcoin/bitcoin.conf
+      HANDSHAKE_RPC_HOST: handshaked
+      HANDSHAKE_RPC_USER: "x"
+      HANDSHAKE_RPC_PASSWORD: "foo"
       REFRESH_SECONDS: 1
+      BAN_ADDRESS_METRICS: true
       LOG_LEVEL: "INFO"
     depends_on:
-      - bitcoind
+      - handshaked
     #volumes:
     # For explicit config file path (with BITCOIN_CONF_PATH above).
     # - ./test-bitcoin.conf:/etc/bitcoin/bitcoin.conf
