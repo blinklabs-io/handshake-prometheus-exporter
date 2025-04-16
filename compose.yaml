@@ -9,7 +9,7 @@ services:
       - --api-key=foo
 
   exporter:
-    image: handshake-prometheus-exporter:latest
+    image: ghcr.io/blinklabs-io/handshake-prometheus-exporter:v0.0.1
     build: .
     ports:
       - "12000:12000"

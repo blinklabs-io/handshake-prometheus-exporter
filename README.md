@@ -12,7 +12,7 @@ The main script is a modified version of [`bitcoin-monitor.py`][source-gist], up
 
 [Handshake]: https://handshake.org/
 [Prometheus]: https://github.com/prometheus/prometheus
-[docker-image]: http://ghcr.io/blinklabs/handshake-prometheus-exporter
+[docker-image]: http://ghcr.io/blinklabs-io/handshake-prometheus-exporter
 [source-repo]: https://github.com/jvstein/bitcoin-prometheus-exporter
 [source-gist]: https://gist.github.com/ageis/a0623ae6ec9cfc72e5cb6bde5754ab1f
 [python-bitcoinlib]: https://github.com/petertodd/python-bitcoinlib
@@ -25,7 +25,7 @@ docker run \
     -e HANDSHAKE_RPC_HOST=handshake-node \
     -e HANDSHAKE_RPC_USER=x \
     -e HANDSHAKE_RPC_PASSWORD=DONT_USE_THIS_YOU_WILL_GET_ROBBED_8ak1gI25KFTvjovL3gAM967mies3E= \
-    http://ghcr.io/blinklabs/handshake-prometheus-exporter:v0.0.1
+    http://ghcr.io/blinklabs-io/handshake-prometheus-exporter:v0.0.1
 ```
 
 ## Basic Testing
