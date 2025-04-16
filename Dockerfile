@@ -1,7 +1,7 @@
 FROM docker.io/library/python:3.12-alpine
 
-LABEL org.opencontainers.image.title "handshake-prometheus-exporter"
-LABEL org.opencontainers.image.description "Prometheus exporter for handshake nodes"
+LABEL org.opencontainers.image.title="handshake-prometheus-exporter"
+LABEL org.opencontainers.image.description="Prometheus exporter for handshake nodes"
 
 # Dependencies for python-bitcoinlib and sanity check.
 RUN apk --no-cache add \
@@ -12,6 +12,7 @@ RUN apk --no-cache add \
 RUN pip install --no-cache-dir \
         prometheus_client \
         python-bitcoinlib \
+        requests \
         riprova
 
 RUN mkdir -p /monitor

@@ -1,30 +1,31 @@
-# Bitcoin Core Prometheus Exporter
+# Handshake Prometheus Exporter
 
-A [Prometheus] exporter for [Bitcoin Core] nodes written in python and packaged for running as a container.
+A [Prometheus] exporter for [Handshake] nodes written in python and packaged for running as a container.
 
-A rudimentary Grafana [dashboard] is available in the [`dashboard/bitcoin-grafana.json`](dashboard/bitcoin-grafana.json)
+A rudimentary Grafana [dashboard] is available in the [`dashboard/handshake-grafana.json`](dashboard/handshake-grafana.json)
 file.
+
+This version is a modified version of [`bitcoin-prometheus-exporter`][source-repo], adapter for use with Handshake nodes.
 
 The main script is a modified version of [`bitcoin-monitor.py`][source-gist], updated to remove the need for the
 `bitcoin-cli` binary, packaged into a [Docker image][docker-image], and expanded to export additional metrics.
 
-[Bitcoin Core]: https://github.com/bitcoin/bitcoin
+[Handshake]: https://handshake.org/
 [Prometheus]: https://github.com/prometheus/prometheus
-[docker-image]: https://hub.docker.com/r/jvstein/bitcoin-prometheus-exporter
-
+[docker-image]: http://ghcr.io/blinklabs/handshake-prometheus-exporter
+[source-repo]: https://github.com/jvstein/bitcoin-prometheus-exporter
 [source-gist]: https://gist.github.com/ageis/a0623ae6ec9cfc72e5cb6bde5754ab1f
 [python-bitcoinlib]: https://github.com/petertodd/python-bitcoinlib
-[dashboard]: https://grafana.com/grafana/dashboards/11274
 
 # Run the container
 ```
 docker run \
-    --name=bitcoin-exporter \
-    -p 9332:9332 \
-    -e BITCOIN_RPC_HOST=bitcoin-node \
-    -e BITCOIN_RPC_USER=alice \
-    -e BITCOIN_RPC_PASSWORD=DONT_USE_THIS_YOU_WILL_GET_ROBBED_8ak1gI25KFTvjovL3gAM967mies3E= \
-    jvstein/bitcoin-prometheus-exporter:v0.7.0
+    --name=handshake-exporter \
+    -p 12000:12000 \
+    -e HANDSHAKE_RPC_HOST=handshake-node \
+    -e HANDSHAKE_RPC_USER=x \
+    -e HANDSHAKE_RPC_PASSWORD=DONT_USE_THIS_YOU_WILL_GET_ROBBED_8ak1gI25KFTvjovL3gAM967mies3E= \
+    http://ghcr.io/blinklabs/handshake-prometheus-exporter:v0.0.1
 ```
 
 ## Basic Testing

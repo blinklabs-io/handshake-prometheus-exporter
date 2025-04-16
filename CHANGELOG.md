@@ -1,7 +1,9 @@
 # Changelog
 Changes to the project.
 
-## [Unreleased]
+## handshake-prometheus-exporter
+
+## [0.0.1]
 
 Initial adaptation for Handshake from Bitcoin Prometheus Exporter.
 
@@ -10,13 +12,14 @@ Initial adaptation for Handshake from Bitcoin Prometheus Exporter.
 - Updated default ports to match Handshake node (12037, 13037, 14037)
 - Renamed all metrics from `bitcoin_*` to `handshake_*`
 
-## [Unreleased]
+## bitcoin-prometheus-exporter
+## [0.7.1]
 
 BREAKING CHANGE: The `bitcoin_ban_created` and `bitcoin_banned_until` metrics are now disabled by default. Re-enable,
 if desired, using `BAN_ADDRESS_METRICS=true`.
 
 ### Changed
-- Update docker base image to be fully qualifed for better podman support ([#25][pr-25])
+- Update docker base image to be fully qualified for better podman support ([#25][pr-25])
 - Add metric for minimum fee ([#31][pr-31])
 - Upgrade to Python 3.12
 - Disable per-address metrics for banned peers. Add `bitcoin_banned_peers` metric for summary information. ([#13][issue-13])
