@@ -25,7 +25,7 @@ docker run \
     -e HANDSHAKE_RPC_HOST=handshake-node \
     -e HANDSHAKE_RPC_USER=x \
     -e HANDSHAKE_RPC_PASSWORD=DONT_USE_THIS_YOU_WILL_GET_ROBBED_8ak1gI25KFTvjovL3gAM967mies3E= \
-    http://ghcr.io/blinklabs-io/handshake-prometheus-exporter:v0.0.1
+    http://ghcr.io/blinklabs-io/handshake-prometheus-exporter:latest
 ```
 
 ## Basic Testing
