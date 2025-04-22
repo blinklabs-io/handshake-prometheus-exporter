@@ -22,8 +22,3 @@ services:
       LOG_LEVEL: "INFO"
     depends_on:
       - handshaked
-    #volumes:
-    # For explicit config file path (with BITCOIN_CONF_PATH above).
-    # - ./test-bitcoin.conf:/etc/bitcoin/bitcoin.conf
-    # For default bitcoin config location (nobody user).
-    # - ./test-bitcoin.conf:/.bitcoin/bitcoin.conf
